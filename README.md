@@ -19,6 +19,114 @@
 
 ---
 
+## 實際範例
+
+用 T8 Prompt Studio 產生 MiniMax H3 提示詞，再丟進 ComfyUI 的 H3 工作流生成影片。
+
+### 介面
+
+![T8 Prompt Studio 的 MiniMax H3 分頁](docs/screenshot_h3.jpg)
+
+| 設定 | 值 |
+|---|---|
+| 渠道 | 本地 GGUF（節點內建 llama.cpp） |
+| T8 模板 | 无（不使用 T8 案例） |
+| 規範 MD | 昭和後期電影感（模板層） |
+| 生成類型 | Ref2VA（參考圖生音視頻） |
+| 參考圖 | Picture 1 公園、Picture 2 女子、Picture 3 白貓 |
+| 時長 / 鏡頭數 | 15 秒 / AUTO |
+| 改寫模式 / 輸出語言 | balanced / English |
+
+輸入的提示詞只有三行：
+
+```text
+使用昭和風格
+圖2女子和圖3白貓在圖1公園，開心玩耍
+背景音樂是低音量的日本昭和小調
+```
+
+<details>
+<summary><b>展開：WebUI 產生的完整 H3 提示詞</b></summary>
+
+```text
+subject_definitions:
+<Subject 1> is the small neighborhood park in <Picture 1>, featuring a weathered wooden bench, a red "SUNTORY" vending machine, a blue bicycle, leafy green trees, and a white sign with Japanese characters.
+<Subject 2> is the young woman from <Picture 2>, with dark hair tied back, wearing a loose black t-shirt and sheer black cropped trousers.
+<Subject 3> is the plump white cat from <Picture 3>, with thick short fur, a round face, green eyes, and a fluffy tail.
+
+summary:
+[reference generation] The target video shows <Subject 2> and <Subject 3> playing happily in <Subject 1>. <Picture 1> defines the park environment, while <Picture 2> and <Picture 3> provide the character appearances for the woman and the cat, respectively.
+
+retention_analysis:
+<Subject 1> (appears in [Shot 1], [Shot 2], [Shot 3]): fully_preserved - the weathered wooden bench, red "SUNTORY" vending machine, blue bicycle, leafy green trees, and white sign with Japanese characters are retained.
+<Subject 2> (appears in [Shot 1], [Shot 2], [Shot 3]): fully_preserved - the young woman's dark hair, loose black t-shirt, and sheer black cropped trousers are retained.
+<Subject 3> (appears in [Shot 1], [Shot 2], [Shot 3]): fully_preserved - the white cat's thick short fur, round face, green eyes, and fluffy tail are retained.
+
+detailed_description:
+Live-action late-Showa Japanese 35mm film print, a small neighborhood park, dappled afternoon sunlight, milky halation, gray-blue shade, visible film grain, warm-yellow skin, faded dyes, soft old-lens haze that is not blur, subtle gate weave. No rim light.
+<Picture 1> is the environment reference for <Subject 1>, not a first-frame lock.
+<Picture 2> is the face and hair reference for <Subject 2>, not a first-frame lock.
+<Picture 3> is the body and fur reference for <Subject 3>, not a frame anchor.
+[Shot 1] The scene opens with a wide shot of <Subject 1>. <Subject 2> sits on the weathered wooden bench, her bare feet resting on the gravel, while <Subject 3> lies on its back on the grass nearby. <Subject 2> extends her hand to gently tickle the cat's soft white belly. The camera tilts down with small amplitude at slow speed to focus on their interaction.
+[Shot 2] At 00:05.000, the shot cuts to a medium shot of the two subjects. <Subject 2> laughs softly as <Subject 3> playfully bats at her fingers with its paws. The red "SUNTORY" vending machine and blue bicycle remain visible in the background, grounding the scene in its specific location. The camera pushes in with small amplitude at slow speed to capture their joyful expressions.
+[Shot 3] At 00:10.000, the shot cuts to a close-up of <Subject 3>. The plump white cat rolls onto its side, its fluffy tail twitching as it stretches toward <Subject 2>'s hand. <Subject 2> continues to stroke the cat's thick fur with a gentle smile. The camera holds a static shot through 00:15.000.
+
+overall_soundscape:
+Slightly narrow, warm optical-track sound with faint hiss. Distant city traffic hum and rustling leaves, close breath, soft paw pads on grass.
+
+non_diegetic_music:
+A low-volume Japanese Showa-era melody plays as a gentle background score, featuring a simple acoustic guitar and a light flute at a slow, nostalgic tempo.
+```
+
+</details>
+
+### 生成的影片
+
+[![昭和公園白貓（點擊觀看含聲音的完整影片）](docs/demo_showa_park.gif)](docs/demo_showa_park.mp4)
+
+15 秒、1184×896、24 fps，含 H3 原生生成的環境音與配樂。上方是無聲的 GIF 預覽，[點此觀看完整 MP4](docs/demo_showa_park.mp4)。
+
+<!--
+想在 README 裡直接播放影片（含聲音）：
+在 GitHub 網頁上編輯這個 README，把 docs/demo_showa_park.mp4 拖進編輯框，
+GitHub 會產生一行 https://github.com/user-attachments/assets/... 的網址，
+用那一行取代上面的 GIF 即可。
+-->
+
+### ComfyUI 工作流
+
+[`examples/MiniMax_H3_showa_park.json`](examples/MiniMax_H3_showa_park.json)：拖進 ComfyUI 即可載入。提示詞已預先填好，參考圖請換成你自己的圖片。
+
+> [!NOTE]
+> 這個工作流與 T8 Prompt Studio 無關，需要另外安裝下列自訂節點與模型。T8 Prompt Studio 只負責產生提示詞。
+
+**自訂節點**
+
+| 節點 | 來源 |
+|---|---|
+| `MiniMaxH3AudioConditioningT8`、`MiniMaxH3AVDecodeT8` | minimax-h3-audio-T8（待補連結） |
+| `H3SigmaRefiner` | [yichengup/ComfyUI-YCNodes-MiniMax-H3](https://github.com/yichengup/ComfyUI-YCNodes-MiniMax-H3) |
+| `SelfLiftAvatarH3TST`、`SelfLiftAvatarH3Sampler` |（待補連結） |
+| `BlockSparseAttention` |（待補連結） |
+| `Power Lora Loader (rgthree)` | [rgthree/rgthree-comfy](https://github.com/rgthree/rgthree-comfy) |
+| `SolAttnMiniMax`、`VHS_LoadVideo`（工作流中為停用狀態） | 選用 |
+
+**模型**
+
+| 類型 | 檔案 |
+|---|---|
+| 主模型 | `MiniMax-H3-hybrid_fl2va_ref2va_b25-49-int8.safetensors` |
+| 文字編碼器 | `qwen3vl_32b_minimax_h3_nvfp4_awq.safetensors` |
+| 視頻 VAE | `minimax_h3_video_vae_int8_convrot.safetensors` |
+| 音頻 VAE | `minimax_h3_audio_vae_fp32.safetensors` |
+| 加速 LoRA | `minimax_h3_turbo_v4_step600_ema_DasiwaREF2VAHybridV1_0_curveproj1025_compat_v001.safetensors` |
+| 其他 LoRA | `Motion_Repair_V2`、`H3_Fight_Flow_V1`、`FrozenWorld_v1` |
+| 放大器 | `h3_upscaler_sharpness_2000steps_v0.1_fp32.safetensors` |
+
+採樣設定：euler、simple、8 步 + 1 步細化（共 9 NFE）。
+
+---
+
 ## 特色
 
 - **不需要 ComfyUI**：直接呼叫節點的 Python 函式，ComfyUI 相關模組以替身代替。
@@ -312,6 +420,8 @@ Gradio 與新版 Starlette 之間的棄用警告，不影響使用，可以忽�
 | `start_t8_webui.bat` | Windows 雙擊啟動 |
 | `requirements.txt` | Python 依賴 |
 | `.gitignore` | 排除含 API Key 的本機設定檔 |
+| `docs/` | README 用的截圖與範例影片 |
+| `examples/` | 範例 ComfyUI 工作流 |
 
 ---
 
