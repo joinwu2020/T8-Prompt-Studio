@@ -1,0 +1,7 @@
+# T8 Prompt Studio — Python 依賴
+# 安裝：python -m pip install -r requirements.txt
+# 已測試：Python 3.12 / 3.13，gradio 6.29–6.30
+gradio>=4.44
+numpy
+pillow
+requests
