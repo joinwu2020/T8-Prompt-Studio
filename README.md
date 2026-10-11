@@ -52,7 +52,7 @@
 
 | 套件 / 程式 | 何時需要 |
 |---|---|
-| `llama-server`（[llama.cpp](https://github.com/ggml-org/llama.cpp/releases)） | 使用「本地 GGUF」渠道時。**建議用這個**，在渠道設定填入路徑即可 |
+| `llama-server`（[llama.cpp b11068](https://github.com/ggml-org/llama.cpp/releases/tag/b11068)） | 使用「本地 GGUF」渠道時。**建議用這個**，下載方式見[本地 GGUF](#本地-gguf節點內建-llamacpp) |
 | `llama-cpp-python` | 本地 GGUF 的備援。預設停用，因為 Windows 上常因缺少 `llama.dll` 而無法載入 |
 
 ---
@@ -141,15 +141,67 @@ H3 的 Ref2VA 與 Qwen Image 的圖像編輯會把參考圖以 base64 送出，�
 
 ### 本地 GGUF（節點內建 llama.cpp）
 
-1. 到 [llama.cpp Releases](https://github.com/ggml-org/llama.cpp/releases) 下載符合你顯卡的版本（NVIDIA 選 CUDA 版），解壓到任一資料夾。
-2. 在「llama-server 執行檔路徑」填入 `C:\llama.cpp\llama-server.exe`，或它所在的資料夾。
-3. 按「🔍 檢查本地執行環境」，確認出現「✅ 將使用」。
-4. 把 `.gguf` 模型放進 `ComfyUI/models/LLM/`（或在「模型根目錄」改成其他位置，模型放在其下的 `LLM/`），按「↻ 掃描 GGUF」後選擇模型與 mmproj。
+#### 1. 下載 llama.cpp（Windows x64 + NVIDIA）
 
-也可以在節點資料夾執行 `python install_local_qwen.py --runtime`，讓節點自行下載它驗證過的 llama-server，這樣就不用填路徑。
+從 [llama.cpp 官方 b11068 發佈頁](https://github.com/ggml-org/llama.cpp/releases/tag/b11068) 下載**同一個 CUDA 版本的兩個 ZIP**：主程式和配套的 CUDA DLL。
+
+| 顯卡 | 主程式（含 `llama-server.exe`） | 配套 CUDA DLL |
+|---|---|---|
+| RTX 50 系列（Blackwell） | [llama-b11068-bin-win-cuda-13.4-x64.zip](https://github.com/ggml-org/llama.cpp/releases/download/b11068/llama-b11068-bin-win-cuda-13.4-x64.zip) | [cudart-llama-bin-win-cuda-13.4-x64.zip](https://github.com/ggml-org/llama.cpp/releases/download/b11068/cudart-llama-bin-win-cuda-13.4-x64.zip) |
+| RTX 40 系列及更早 | [llama-b11068-bin-win-cuda-12.4-x64.zip](https://github.com/ggml-org/llama.cpp/releases/download/b11068/llama-b11068-bin-win-cuda-12.4-x64.zip) | [cudart-llama-bin-win-cuda-12.4-x64.zip](https://github.com/ggml-org/llama.cpp/releases/download/b11068/cudart-llama-bin-win-cuda-12.4-x64.zip) |
+
+**兩個 ZIP 解壓到同一個資料夾**，例如 `C:\llama.cpp\`，讓 `llama-server.exe` 和 `cudart64_*.dll`、`cublas64_*.dll` 放在一起。少了 CUDA DLL，llama-server 會無法啟動或退回 CPU。
+
+> [!TIP]
+> 驅動程式太舊時 CUDA 13.4 版可能無法啟動，請先更新 NVIDIA 驅動，或改用 12.4 版。沒有 NVIDIA 顯卡可選同頁的 `win-vulkan-x64` 或 `win-cpu-x64`（不需要 cudart）。
+
+#### 2. 在 WebUI 設定
+
+1. 到「⚙ 渠道設定」，在「llama-server 執行檔路徑」填入 `C:\llama.cpp\llama-server.exe`，或它所在的資料夾。
+2. 按「🔍 檢查本地執行環境」，確認出現「✅ 將使用」。
+3. 把 `.gguf` 模型放進 `ComfyUI/models/LLM/`（或在「模型根目錄」改成其他位置，模型放在其下的 `LLM/`），按「↻ 掃描 GGUF」後選擇模型與 mmproj。
+4. 按「💾 儲存設定」，回到分頁把渠道切到「本地 GGUF」。
+
+也可以在 T8 節點資料夾執行 `python install_local_qwen.py --runtime`，讓節點自行下載它驗證過的 llama-server，這樣就不用填路徑。
 
 > [!NOTE]
 > 本地 GGUF 一次只能載入一個模型，節點內建互斥鎖，多個分頁同時使用本地渠道時會排隊。其他渠道不受影響。
+
+#### 3. GGUF 模型
+
+模型檔一律放進 `ComfyUI/models/LLM/`，**保持原始檔名不變**。H3 的 Ref2VA、Qwen Image 的圖像編輯需要看圖，請一併放入該模型配對的 `mmproj` 視覺組件，並在設定裡選擇它。
+
+**通用 LLM（Q4 量化）**
+
+| 模型 | 說明 |
+|---|---|
+| [mradermacher/qwen3.8-27b-aragon-uncensored-GGUF](https://huggingface.co/mradermacher/qwen3.8-27b-aragon-uncensored-GGUF) | Qwen3.8 27B，約需 24 GB 以上顯存才流暢 |
+| [llmfan46/gemma-4-12B-it-qat-q4_0-uncensored-heretic-GGUF](https://huggingface.co/llmfan46/gemma-4-12B-it-qat-q4_0-uncensored-heretic-GGUF) | Gemma 4 12B QAT Q4_0，顯存需求較低 |
+
+到模型頁的「Files」下載 Q4 的 `.gguf`；需要看圖時，一併下載同一頁的 `mmproj` 檔。
+
+> [!WARNING]
+> 以上為第三方社群量化或去審查（uncensored / heretic）版本，非官方模型。請自行確認其授權條款，並為生成內容負責。
+
+**選用：Qwen Image 專用 PE 模型**
+
+這些模型來自 T8 另一個節點 [Comfyui-Qwen-Image-Prompt-Rewrite-T8](https://github.com/T8mars/Comfyui-Qwen-Image-Prompt-Rewrite-T8)。本 WebUI 不會呼叫那個節點，但它提供的 GGUF 可以放進 `models/LLM/`，在本地 GGUF 渠道選用。
+
+```bash
+cd ComfyUI/custom_nodes
+git clone https://github.com/T8mars/Comfyui-Qwen-Image-Prompt-Rewrite-T8.git
+cd Comfyui-Qwen-Image-Prompt-Rewrite-T8
+```
+
+依該節點的說明下載模型，保持檔名不變放進 `models/LLM/`，例如：
+
+| 用途 | 檔案 |
+|---|---|
+| 選用的 Heretic 文生圖模型 | `pe_t2i_heretic-Q4_K_M.gguf` |
+| 選用的 Heretic 圖像編輯模型 | `pe_i2i_heretic-Q4_K_M.gguf` |
+| Heretic 圖像編輯的視覺組件 | `pe_i2i_heretic.mmproj-bf16.gguf` |
+
+完整檔案清單與下載位置請以該節點的 README 為準。
 
 ### 貞貞平價小屋 / 貞貞的 AI 工坊
 
