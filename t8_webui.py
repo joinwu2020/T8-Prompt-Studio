@@ -59,32 +59,43 @@ LOCAL_RT = B.load("local_qwen_runtime")
 LOCAL_PV = B.load("local_qwen_provider")
 CONFIG_PATH = NODE_DIR / ".t8_webui.local.json"
 
-CH_OPENAI = "OpenAI 相容（LM Studio / llama-server）"
-CH_LOCAL = "本地 GGUF（節點內建 llama.cpp）"
-CH_SEEDANCE = "貞貞平價小屋"
-CH_WORKSHOP = "貞貞的 AI 工坊"
-CHANNELS = {
-    CH_OPENAI: h3.OPENAI_API_MODE,
-    CH_LOCAL: getattr(h3, "LOCAL_QWEN_API_MODE", "本地 GGUF（llama.cpp / Qwen，离线）"),
-    CH_SEEDANCE: h3.SEEDANCE_API_MODE,
-    CH_WORKSHOP: h3.AI_WORKSHOP_API_MODE,
+# ── 來源類型（每一組 API 來源屬於其中一種）──
+T_OPENAI = "OpenAI 相容（LM Studio / llama-server / NVIDIA…）"
+T_LOCAL = "本地 GGUF（節點內建 llama.cpp）"
+T_SEEDANCE = "貞貞平價小屋"
+T_WORKSHOP = "貞貞的 AI 工坊"
+T_STRATA = "Strata 本地服務（橋接）"
+STRATA_MODE = getattr(h3, "STRATA_API_MODE", None)
+PROVIDER_TYPES = {
+    T_OPENAI: h3.OPENAI_API_MODE,
+    T_LOCAL: getattr(h3, "LOCAL_QWEN_API_MODE", "本地 GGUF（llama.cpp / Qwen，离线）"),
+    T_SEEDANCE: h3.SEEDANCE_API_MODE,
+    T_WORKSHOP: h3.AI_WORKSHOP_API_MODE,
 }
-DEFAULT_CFG = {
-    "channel": CH_OPENAI,
-    "openai_base_url": "http://192.168.0.53:1234/v1/chat/completions",
-    "openai_model": "gemma-4-12b",
-    "openai_key": "12345678",
-    "seedance_key": "",
-    "workshop_key": "",
+if STRATA_MODE:
+    PROVIDER_TYPES[T_STRATA] = STRATA_MODE
+# 舊版（只有四個固定渠道）的名稱，轉換設定檔用
+_LEGACY_CHANNELS = {"OpenAI 相容（LM Studio / llama-server）": T_OPENAI, "本地 GGUF（節點內建 llama.cpp）": T_LOCAL,
+                    "貞貞平價小屋": T_SEEDANCE, "貞貞的 AI 工坊": T_WORKSHOP}
+
+PROFILE_DEFAULTS = {
+    "name": "", "type": T_OPENAI, "base_url": "", "model": "", "api_key": "",
     "workshop_model": getattr(h3, "AI_WORKSHOP_DEFAULT_MODEL", "gemini-3.5-flash"),
-    "workshop_custom_model": "",
-    "models_dir": str(B.MODELS_DIR),
     "local_model": LOCAL_RT.DEFAULT_MODEL_FILENAME,
     "local_mmproj": getattr(LOCAL_RT, "AUTO_MMPROJ", LOCAL_RT.DEFAULT_MMPROJ_FILENAME),
-    "local_context_size": LOCAL_PV.DEFAULT_CONTEXT_SIZE,
-    "local_max_tokens": LOCAL_PV.DEFAULT_MAX_TOKENS,
-    "local_think_mode": LOCAL_PV.LOCAL_THINK_OFF,
-    "local_unload_policy": LOCAL_PV.LOCAL_UNLOAD_AFTER_RUN,
+    "local_context_size": LOCAL_PV.DEFAULT_CONTEXT_SIZE, "local_max_tokens": LOCAL_PV.DEFAULT_MAX_TOKENS,
+    "local_think_mode": LOCAL_PV.LOCAL_THINK_OFF, "local_unload_policy": LOCAL_PV.LOCAL_UNLOAD_AFTER_RUN,
+    "strata_allow_private": False,
+}
+DEFAULT_PROFILES = [
+    {**PROFILE_DEFAULTS, "name": "LM Studio", "type": T_OPENAI,
+     "base_url": "http://192.168.0.53:1234/v1/chat/completions", "model": "gemma-4-12b", "api_key": "12345678"},
+    {**PROFILE_DEFAULTS, "name": "本地 GGUF", "type": T_LOCAL},
+]
+DEFAULT_CFG = {
+    "profiles": DEFAULT_PROFILES,
+    "default_profile": "LM Studio",
+    "models_dir": str(B.MODELS_DIR),
     "llama_server_path": "",
     "allow_llama_cpp_python": False,
     "concurrency": 8,
@@ -92,13 +103,60 @@ DEFAULT_CFG = {
 }
 
 
+def _migrate(raw: dict) -> dict:
+    """舊版設定檔（單組 openai_* / seedance_key …）轉成多組來源清單"""
+    if "profiles" in raw:
+        return raw
+    profs = []
+    local = {k: raw[k] for k in ("local_model", "local_mmproj", "local_context_size", "local_max_tokens",
+                                  "local_think_mode", "local_unload_policy") if k in raw}
+    if raw.get("openai_base_url"):
+        profs.append({**PROFILE_DEFAULTS, "name": "OpenAI 相容", "type": T_OPENAI, "base_url": raw["openai_base_url"],
+                      "model": raw.get("openai_model", ""), "api_key": raw.get("openai_key", "")})
+    profs.append({**PROFILE_DEFAULTS, **local, "name": "本地 GGUF", "type": T_LOCAL})
+    if raw.get("seedance_key"):
+        profs.append({**PROFILE_DEFAULTS, "name": "貞貞平價小屋", "type": T_SEEDANCE, "api_key": raw["seedance_key"]})
+    if raw.get("workshop_key"):
+        profs.append({**PROFILE_DEFAULTS, "name": "貞貞的 AI 工坊", "type": T_WORKSHOP, "api_key": raw["workshop_key"],
+                      "workshop_model": raw.get("workshop_model", PROFILE_DEFAULTS["workshop_model"]),
+                      "model": raw.get("workshop_custom_model", "")})
+    old = _LEGACY_CHANNELS.get(raw.get("channel"), T_OPENAI)
+    default = next((p["name"] for p in profs if p["type"] == old), profs[0]["name"])
+    keep = {k: raw[k] for k in ("models_dir", "llama_server_path", "allow_llama_cpp_python", "concurrency", "save_keys")
+            if k in raw}
+    return {**keep, "profiles": profs, "default_profile": default}
+
+
 def load_cfg() -> dict:
-    cfg = dict(DEFAULT_CFG)
+    cfg = json.loads(json.dumps(DEFAULT_CFG))
     try:
-        cfg.update(json.loads(CONFIG_PATH.read_text(encoding="utf-8")))
+        raw = json.loads(CONFIG_PATH.read_text(encoding="utf-8"))
+        cfg.update(_migrate(raw))
     except (OSError, ValueError):
         pass
+    cfg["profiles"] = [{**PROFILE_DEFAULTS, **p} for p in cfg.get("profiles") or DEFAULT_PROFILES if p.get("name")]
+    if not cfg["profiles"]:
+        cfg["profiles"] = json.loads(json.dumps(DEFAULT_PROFILES))
+    if cfg.get("default_profile") not in profile_names(cfg):
+        cfg["default_profile"] = cfg["profiles"][0]["name"]
     return cfg
+
+
+def profile_names(cfg=None):
+    return [p["name"] for p in (cfg or CFG)["profiles"]]
+
+
+def get_profile(name):
+    return next((p for p in CFG["profiles"] if p["name"] == name),
+                next(p for p in CFG["profiles"] if p["name"] == CFG["default_profile"]))
+
+
+def save_cfg():
+    data = json.loads(json.dumps(CFG))
+    if not data.get("save_keys"):
+        for p in data["profiles"]:
+            p["api_key"] = ""
+    CONFIG_PATH.write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")
 
 
 CFG = load_cfg()
@@ -188,27 +246,42 @@ def gguf_lists():
         mmproj = list(LOCAL_RT.list_mmproj_models())
     except Exception as e:  # noqa: BLE001
         _WARN.append(f"掃描 GGUF 失敗：{e}")
-        models, mmproj = [CFG["local_model"]], [CFG["local_mmproj"]]
+        models, mmproj = [PROFILE_DEFAULTS["local_model"]], [PROFILE_DEFAULTS["local_mmproj"]]
     return models, mmproj
 
 
-def provider_kwargs(channel: str) -> dict:
-    """依渠道產生節點共用的 API 參數；各節點只會收到它認得的那些"""
-    c = CFG
-    mode = CHANNELS.get(channel, h3.OPENAI_API_MODE)
+def _strata_url(base):
+    """Strata 只要服務根位址；使用者貼了 /v1/chat/completions 也接受"""
+    return re.sub(r"/v1(/chat/completions)?/?$", "", (base or "").strip().rstrip("/")) or "http://127.0.0.1:8080"
+
+
+def provider_kwargs(profile_name: str) -> dict:
+    """依來源產生節點共用的 API 參數；各節點只會收到它認得的那些"""
+    p = get_profile(profile_name)
+    t = p["type"]
     kw = {
-        "api_mode": mode,
-        "local_model": c["local_model"], "local_mmproj": c["local_mmproj"],
-        "local_context_size": int(c["local_context_size"]), "local_max_tokens": int(c["local_max_tokens"]),
-        "local_think_mode": c["local_think_mode"], "local_unload_policy": c["local_unload_policy"],
+        "api_mode": PROVIDER_TYPES.get(t, h3.OPENAI_API_MODE),
+        "local_model": p["local_model"], "local_mmproj": p["local_mmproj"],
+        "local_context_size": int(p["local_context_size"]), "local_max_tokens": int(p["local_max_tokens"]),
+        "local_think_mode": p["local_think_mode"], "local_unload_policy": p["local_unload_policy"],
     }
-    if channel == CH_OPENAI:
-        kw.update(api_key=c["openai_key"], openai_base_url=c["openai_base_url"], custom_model=c["openai_model"])
-    elif channel == CH_SEEDANCE:
-        kw.update(api_key=c["seedance_key"])
-    elif channel == CH_WORKSHOP:
-        kw.update(api_key=c["workshop_key"], ai_workshop_model=c["workshop_model"],
-                  custom_model=c["workshop_custom_model"])
+    if t == T_OPENAI:
+        kw.update(api_key=p["api_key"], openai_base_url=p["base_url"], custom_model=p["model"])
+    elif t == T_SEEDANCE:
+        kw.update(api_key=p["api_key"])
+    elif t == T_WORKSHOP:
+        kw.update(api_key=p["api_key"], ai_workshop_model=p["workshop_model"], custom_model=p["model"])
+    elif t == T_STRATA:
+        settings = {"url": _strata_url(p["base_url"]), "model": p["model"] or "AUTO",
+                    "allow_private_network": bool(p.get("strata_allow_private"))}
+        kw["provider_request_options"] = {"strata_settings": settings}
+        # Qwen Image / MOSS 由共享設定進入 Strata
+        pc = B.load("provider_config")
+        kw["provider_config"] = {"schema_version": pc.PROVIDER_CONFIG_SCHEMA, "provider": pc.PROVIDER_STRATA,
+                                 "strata_settings": settings}
+        if p["api_key"]:
+            import os
+            os.environ["STRATA_API_KEY"] = p["api_key"]
     return kw
 
 
@@ -242,6 +315,25 @@ def _patched_request(self, method, url, *args, **kwargs):
 
 
 requests.Session.request = _patched_request
+
+# Strata 用 http.client 送出，不經過 requests → 另外攔截它的 complete()，預覽時一樣不送出
+try:
+    _STRATA = B.load("strata_provider")
+    _orig_strata_complete = _STRATA.StrataRun.complete
+
+    def _patched_strata_complete(self, messages, *args, **kwargs):
+        cap = getattr(_TL, "cap", None)
+        if cap is not None:
+            model = (self.settings.model if getattr(self, "settings", None) else "AUTO")
+            cap["payloads"].append({"model": f"Strata:{model}", "temperature": kwargs.get("temperature"),
+                                    "messages": messages})
+            if cap["dry"]:
+                raise _PreviewStop()
+        return _orig_strata_complete(self, messages, *args, **kwargs)
+
+    _STRATA.StrataRun.complete = _patched_strata_complete
+except Exception as _e:  # noqa: BLE001
+    _WARN.append(f"無法掛上 Strata 預覽攔截（預覽 Strata 時可能會真的送出）：{_e}")
 
 
 def render_payloads(payloads) -> str:
@@ -494,8 +586,13 @@ def code_box(**kw):
     return gr.Code(language=None, **kw)
 
 
+CHANNEL_RADIOS: list = []  # 所有分頁的來源選擇，來源清單變動時一起更新
+
+
 def channel_radio():
-    return gr.Radio(list(CHANNELS), value=CFG["channel"], label="渠道（預設值在 ⚙ 渠道設定）")
+    r = gr.Radio(profile_names(), value=CFG["default_profile"], label="API 來源（在 ⚙ API 來源 管理）")
+    CHANNEL_RADIOS.append(r)
+    return r
 
 
 def template_column(default=NONE_TPL):
@@ -560,6 +657,40 @@ def wire(btn, pv, fn, inputs, outputs, full):
     pv.click(preview, inputs, full, concurrency_limit=None)
 
 
+# ═════════════════════════ H3 選用：色彩風格、創作者風格、分鏡導演（節點 1.38+）═════════════════════════
+try:
+    VS = B.load("visual_styles")
+    STYLE_OPTIONS = list(VS.style_options())
+    STYLE_NONE = VS.NONE
+    STYLE_SCOPES = list(VS.SCOPES)
+except Exception as _e:  # noqa: BLE001
+    VS, STYLE_OPTIONS, STYLE_NONE, STYLE_SCOPES = None, [], None, []
+    _WARN.append(f"節點沒有視覺風格模組，H3 的色彩／創作者風格會隱藏：{_e}")
+try:
+    SB = B.load("storyboard_director")
+    STORYBOARD_OPTIONS = list(SB.STORYBOARD_OPTIONS)
+except Exception as _e:  # noqa: BLE001
+    SB, STORYBOARD_OPTIONS = None, []
+    _WARN.append(f"節點沒有分鏡導演模組：{_e}")
+
+
+def style_configs(color_sel, color_scope, creator_sel, storyboard):
+    kw = {}
+    if VS is not None and color_sel and color_sel != STYLE_NONE:
+        kw["color_style_config"] = VS.build_style_config("color", VS.ON, color_sel, color_scope or STYLE_SCOPES[0])
+    if VS is not None and creator_sel and creator_sel != STYLE_NONE:
+        kw["creator_style_config"] = VS.build_style_config("creator", VS.ON, creator_sel)
+    if SB is not None and storyboard and storyboard != SB.STORYBOARD_OFF:
+        kw["storyboard_director_config"] = SB.build_storyboard_director_config(storyboard)
+    return kw
+
+
+def filter_styles(q, current):
+    q = (q or "").strip().lower()
+    opts = [o for o in STYLE_OPTIONS if o == STYLE_NONE or not q or q in o.lower()]
+    return gr.Radio(choices=opts, value=current if current in opts else None)
+
+
 # ═════════════════════════ 各節點執行函式 ═════════════════════════
 H3_TASKS = _opt(h3, "TASK_TYPE_LABELS", ["Ref2VA（参考图/视频生音视频）"])
 H3_PROMPT_MODES = _opt(h3, "PROMPT_MODES", ["官方增强", "参考模板融合"])
@@ -567,7 +698,8 @@ H3_PROMPT_MODES = _opt(h3, "PROMPT_MODES", ["官方增强", "参考模板融合"
 
 def run_h3(channel, tpl, prompt, task, first, last, gallery, duration, shots, rewrite, lang, words,
            preset, director, quality, creation, profile, prompt_mode, ref_template, ref_ctx, constraints,
-           video_urls, seed, rule_names, rule_target):
+           video_urls, seed, rule_names, rule_target, color_sel=None, color_scope=None, creator_sel=None,
+           storyboard=None):
     constraints, ref_template, prompt_mode = apply_rules(
         rule_names, rule_target, "h3", constraints, ref_template, prompt_mode, H3_PROMPT_MODES)
     return call_filtered(
@@ -578,7 +710,8 @@ def run_h3(channel, tpl, prompt, task, first, last, gallery, duration, shots, re
         case_template=tpl or NONE_TPL, creative_preset=preset, director_skill=director,
         quality_mode=quality, creation_mode=creation, first_frame=to_array(first), last_frame=to_array(last),
         reference_images=gallery_dict(gallery, 9), reference_context=ref_ctx, constraints=constraints,
-        openai_video_urls=video_urls, seed=int(seed), **provider_kwargs(channel))
+        openai_video_urls=video_urls, seed=int(seed),
+        **style_configs(color_sel, color_scope, creator_sel, storyboard), **provider_kwargs(channel))
 
 
 def run_m3(channel, idea, lyrics_mode, lyrics, lyrics_lang, custom_lang, duration, rewrite, quality,
@@ -613,7 +746,7 @@ def run_yue(channel, *values):
             kw[k] = int(v or 0)
         elif isinstance(d, float):
             kw[k] = float(v)
-    allowed = set(yue.DEFAULTS) | {"api_key", "lyric_plan", "arrangement_plan"}
+    allowed = set(yue.DEFAULTS) | {"api_key", "lyric_plan", "arrangement_plan", "provider_request_options"}
     prov = {k: v for k, v in provider_kwargs(channel).items() if k in allowed}
     return yue.enhance_yue2_prompt(**kw, **prov)
 
@@ -630,90 +763,267 @@ def run_qwi(channel, prompt, mode, gallery, max_chars, ratio, transparent, profi
     return tuple(out)[:4]
 
 
+
+# ═════════════════════════ MOSS Image（節點 1.36+）═════════════════════════
+try:
+    MOSS = B.load("moss_image")
+    MOSS_C = B.load("moss_image_contract")
+    MOSS_R = B.load("moss_authoring_rules")
+    MOSS_PROFILES = list(getattr(MOSS_R, "PROFILES", []))
+except Exception as _e:  # noqa: BLE001
+    MOSS = MOSS_C = MOSS_R = None
+    MOSS_PROFILES = []
+    _WARN.append(f"節點沒有 MOSS Image 模組，分頁會隱藏：{_e}")
+
+
+def run_moss(channel, prompt, operation, fmt, width, height, lang, gallery, locked_text, max_chars,
+             profile, max_corr, draft_json, seed):
+    out = call_filtered(
+        MOSS.MOSSImagePromptEnhancer.execute, prompt=prompt, operation=operation, output_format=fmt,
+        width=int(width), height=int(height), output_language=lang,
+        reference_images=gallery_dict(gallery, int(getattr(MOSS, "MAX_IMAGES", 10))), locked_text=locked_text,
+        max_output_chars=int(max_chars), authoring_profile=profile, max_corrections=int(max_corr),
+        draft_json=draft_json, seed=int(seed), **provider_kwargs(channel))
+    vals = list(tuple(out))[:6]
+    return vals[0], int(vals[1]), int(vals[2]), vals[3], vals[4], vals[5]
+
+
+# ═════════════════════════ API 來源管理（設定頁互動）═════════════════════════
+FORM_KEYS = ["name", "type", "base_url", "model", "api_key", "workshop_model", "strata_allow_private",
+             "local_model", "local_mmproj", "local_context_size", "local_max_tokens", "local_think_mode",
+             "local_unload_policy"]
+TYPE_HINTS = {
+    T_OPENAI: "LM Studio、llama-server、vLLM、NVIDIA（`https://integrate.api.nvidia.com/v1/chat/completions`）等。"
+              "Base URL 可含或不含 `/chat/completions`。",
+    T_LOCAL: "由節點啟動 llama-server 載入下方的 GGUF。llama-server 路徑在下方「本地 llama.cpp 與全域設定」。",
+    T_SEEDANCE: "只需要 API Key；留空會讀環境變數 `SEEDANCE_API_KEY`。",
+    T_WORKSHOP: "選擇 AI 工坊模型；選 Custom 時在「模型 ID」填完整模型名稱。",
+    T_STRATA: "連到已經在執行的 Strata 服務（預設 `http://127.0.0.1:8080`）。模型留空或填 `AUTO` 會用服務目前載入的模型。"
+              "Strata 在本機時 API Key 選填；**在其他電腦上時要勾選「允許區網位址」，而且必須填 API Key**。",
+}
+
+
+def type_visibility(t):
+    show = {"url": t in (T_OPENAI, T_STRATA), "model": t in (T_OPENAI, T_WORKSHOP, T_STRATA),
+            "key": t != T_LOCAL, "wmodel": t == T_WORKSHOP, "strata": t == T_STRATA, "local": t == T_LOCAL}
+    url_label = "Strata 服務位址" if t == T_STRATA else "Base URL"
+    model_label = {T_WORKSHOP: "自訂模型 ID（AI 工坊選 Custom 時）", T_STRATA: "模型（留空 = AUTO）"}.get(t, "模型 ID")
+    key_label = {T_STRATA: "API Key（選填）", T_SEEDANCE: "API Key（留空讀 SEEDANCE_API_KEY）"}.get(t, "API Key")
+    return [gr.update(visible=show["url"], label=url_label), gr.update(visible=show["model"], label=model_label),
+            gr.update(visible=show["key"], label=key_label), gr.update(visible=show["wmodel"]),
+            gr.update(visible=show["strata"]), gr.update(visible=show["local"]), TYPE_HINTS.get(t, "")]
+
+
+def list_info():
+    rows = [f"- {'★ ' if n == CFG['default_profile'] else ''}**{n}**　{get_profile(n)['type']}" for n in profile_names()]
+    return "\n".join(rows)
+
+
+def form_values(name):
+    p = get_profile(name)
+    return [p[k] for k in FORM_KEYS]
+
+
+def radio_updates(*currents):
+    names = profile_names()
+    return [gr.Radio(choices=names, value=c if c in names else CFG["default_profile"]) for c in currents]
+
+
+def _unique(base):
+    names, n, name = profile_names(), 2, base
+    while name in names:
+        name, n = f"{base} {n}", n + 1
+    return name
+
+
+def wire_settings(ui):
+    lst, form, vis = ui["list"], ui["form"], ui["vis"]
+    radios = list(CHANNEL_RADIOS)
+    f_type = form[1]
+    f_type.change(type_visibility, f_type, vis)
+
+    def load(name):
+        vals = form_values(name)
+        return [*vals, *type_visibility(vals[1]), ""]
+    lst.change(load, lst, [*form, *vis, ui["msg"]])
+
+    def save(selected, *vals):
+        data = dict(zip(FORM_KEYS, vals))
+        data["name"] = str(data["name"] or "").strip()
+        if not data["name"]:
+            return [gr.update(), *[gr.update()] * len(radios), gr.update(), "❌ 名稱不能空白"]
+        if data["name"] != selected and data["name"] in profile_names():
+            return [gr.update(), *[gr.update()] * len(radios), gr.update(), f"❌ 已經有名為「{data['name']}」的來源"]
+        for k in ("local_context_size", "local_max_tokens"):
+            data[k] = int(data[k])
+        data["strata_allow_private"] = bool(data["strata_allow_private"])
+        idx = next((i for i, p in enumerate(CFG["profiles"]) if p["name"] == selected), None)
+        if idx is None:
+            CFG["profiles"].append({**PROFILE_DEFAULTS, **data})
+        else:
+            CFG["profiles"][idx] = {**PROFILE_DEFAULTS, **data}
+            if CFG["default_profile"] == selected:
+                CFG["default_profile"] = data["name"]
+        save_cfg()
+        return [gr.Radio(choices=profile_names(), value=data["name"]), *radio_updates(*[None] * len(radios)),
+                list_info(), f"✓ 已儲存「{data['name']}」"]
+    ui["save"].click(save, [lst, *form], [lst, *radios, ui["info"], ui["msg"]])
+
+    def add(copy_from=None):
+        def fn(selected, *currents):
+            src = get_profile(selected) if copy_from else {**PROFILE_DEFAULTS}
+            name = _unique(f"{src['name']} 複本" if copy_from else "新來源")
+            CFG["profiles"].append({**src, "name": name})
+            save_cfg()
+            return [gr.Radio(choices=profile_names(), value=name), *radio_updates(*currents), list_info()]
+        return fn
+    ui["new"].click(add(), [lst, *radios], [lst, *radios, ui["info"]])
+    ui["dup"].click(add(True), [lst, *radios], [lst, *radios, ui["info"]])
+
+    def star(selected, *currents):
+        CFG["default_profile"] = selected
+        save_cfg()
+        return [*radio_updates(*currents), list_info()]
+    ui["star"].click(star, [lst, *radios], [*radios, ui["info"]])
+
+    def delete(selected, *currents):
+        if len(CFG["profiles"]) <= 1:
+            return [gr.update(), *[gr.update()] * len(radios), list_info() + "\n\n❌ 至少要保留一組來源"]
+        CFG["profiles"] = [p for p in CFG["profiles"] if p["name"] != selected]
+        if CFG["default_profile"] == selected:
+            CFG["default_profile"] = CFG["profiles"][0]["name"]
+        save_cfg()
+        return [gr.Radio(choices=profile_names(), value=CFG["default_profile"]), *radio_updates(*currents), list_info()]
+    ui["delete"].click(delete, [lst, *radios], [lst, *radios, ui["info"]])
+
+    def test(*vals):
+        d = dict(zip(FORM_KEYS, vals))
+        t = d["type"]
+        if t == T_LOCAL:
+            return runtime_report()
+        if t in (T_SEEDANCE, T_WORKSHOP):
+            return "雲端渠道請直接在分頁按「👁 預覽完整請求」或生成一次測試。"
+        base = _strata_url(d["base_url"]) + "/v1" if t == T_STRATA else \
+            re.sub(r"/chat/completions/?$", "", (d["base_url"] or "").strip().rstrip("/"))
+        if not base:
+            return "❌ 請先填 Base URL"
+        headers = {"Authorization": f"Bearer {d['api_key']}"} if d["api_key"] else {}
+        try:
+            r = requests.get(base + "/models", headers=headers, timeout=15)
+        except requests.RequestException as e:
+            return f"❌ 連不到 `{base}/models`：{type(e).__name__}"
+        if r.status_code in (401, 403):
+            return f"❌ HTTP {r.status_code}：API Key 錯誤或沒有權限"
+        if r.status_code >= 400:
+            return f"⚠ HTTP {r.status_code}：服務有回應，但不支援列出模型（不一定代表不能用）"
+        try:
+            ids = [m.get("id") for m in r.json().get("data", []) if isinstance(m, dict)]
+        except ValueError:
+            return "⚠ 服務有回應，但回傳的不是 JSON"
+        model = (d["model"] or "").strip()
+        found = "" if not model or model.upper() == "AUTO" else \
+            (f"\n\n✅ 模型 `{model}` 在清單中" if model in ids else f"\n\n⚠ 清單裡找不到模型 `{model}`，請確認 ID 是否正確")
+        sample = "、".join(f"`{i}`" for i in ids[:15]) + ("…" if len(ids) > 15 else "")
+        return f"✅ 連線成功，共 {len(ids)} 個模型：{sample}{found}"
+    ui["test"].click(test, form, ui["msg"])
+
+    def check(server, pyfb, mdir):
+        CFG.update(llama_server_path=str(server or "").strip().strip('"'), allow_llama_cpp_python=bool(pyfb),
+                   models_dir=mdir)
+        set_models_dir(mdir)
+        return runtime_report()
+    ui["check"].click(check, [ui["server"], ui["pyfb"], ui["dir"]], ui["rt"])
+
+    def scan(mdir):
+        set_models_dir(mdir)
+        m, mp = gguf_lists()
+        return gr.Radio(choices=m, value=m[0] if m else None), gr.Radio(choices=mp, value=mp[0] if mp else None)
+    ui["scan"].click(scan, ui["dir"], [form[7], form[8]])
+
+    def gsave(server, pyfb, mdir, keys, conc):
+        CFG.update(llama_server_path=str(server or "").strip().strip('"'), allow_llama_cpp_python=bool(pyfb),
+                   models_dir=mdir, save_keys=bool(keys), concurrency=int(conc))
+        set_models_dir(mdir)
+        save_cfg()
+        return f"✓ 已儲存到 `{CONFIG_PATH.name}`（同時執行數需重啟）"
+    ui["gsave"].click(gsave, [ui["server"], ui["pyfb"], ui["dir"], ui["save_keys"], ui["conc"]], ui["gmsg"])
+
+
 # ═════════════════════════ 介面 ═════════════════════════
 def build_ui():
+    CHANNEL_RADIOS.clear()
     with gr.Blocks(title="T8 Prompt Studio", **({} if _GR6 else {"css": CSS})) as demo:
-        gr.Markdown("## T8 Prompt Studio　·　H3 / Music 3 / YuE2 / Qwen Image 2.1")
+        gr.Markdown("## T8 Prompt Studio　·　H3 / Music 3 / YuE2 / Qwen Image 2.1 / MOSS Image")
         with gr.Tabs():
-            # ───────── ⚙ 渠道設定 ─────────
-            with gr.Tab("⚙ 渠道設定"):
-                s_channel = gr.Radio(list(CHANNELS), value=CFG["channel"], label="預設渠道（各分頁可個別切換）")
-                with gr.Row():
-                    with gr.Column():
-                        gr.Markdown("#### OpenAI 相容（LM Studio / llama-server / vLLM）")
-                        s_url = gr.Textbox(label="Base URL", value=CFG["openai_base_url"])
-                        s_model = gr.Textbox(label="模型 ID", value=CFG["openai_model"])
-                        s_okey = gr.Textbox(label="API Key", value=CFG["openai_key"], type="password")
-                        gr.Markdown("#### 雲端")
-                        s_skey = gr.Textbox(label="貞貞平價小屋 API Key（留空讀 SEEDANCE_API_KEY）",
-                                            value=CFG["seedance_key"], type="password")
-                        s_wkey = gr.Textbox(label="AI 工坊 API Key", value=CFG["workshop_key"], type="password")
-                        s_wmodel = gr.Radio(_opt(h3, "AI_WORKSHOP_MODEL_OPTIONS", [CFG["workshop_model"]]),
-                                            value=CFG["workshop_model"], label="AI 工坊模型")
-                        s_wcustom = gr.Textbox(label="AI 工坊自訂模型 ID", value=CFG["workshop_custom_model"])
-                    with gr.Column():
-                        gr.Markdown("#### 本地 GGUF（節點內建 llama.cpp，免 API Key）")
-                        s_server = gr.Textbox(label="llama-server 執行檔路徑（例：C:\\llama.cpp\\llama-server.exe，也可填資料夾）",
-                                              value=CFG["llama_server_path"])
-                        s_pyfb = gr.Checkbox(value=bool(CFG["allow_llama_cpp_python"]),
-                                             label="允許退回 llama-cpp-python（裝壞時會出錯，建議關閉）")
+            # ───────── ⚙ API 來源 ─────────
+            with gr.Tab("⚙ API 來源"):
+                gr.Markdown("可以存多組 API 來源（例如 LM Studio、NVIDIA、本地 GGUF…），每個分頁各自選用。"
+                            "標 ★ 的是預設來源。")
+                with gr.Row(equal_height=False):
+                    with gr.Column(scale=1, min_width=260):
+                        s_list = gr.Radio(profile_names(), value=CFG["default_profile"], label="來源清單")
+                        with gr.Row():
+                            s_new = gr.Button("＋ 新增", size="sm")
+                            s_dup = gr.Button("⧉ 複製", size="sm")
+                        with gr.Row():
+                            s_star = gr.Button("★ 設為預設", size="sm")
+                            s_del = gr.Button("🗑 刪除", size="sm", variant="stop")
+                        s_info = gr.Markdown()
+                    with gr.Column(scale=2, min_width=420):
+                        p0 = get_profile(CFG["default_profile"])
+                        f_name = gr.Textbox(label="名稱", value=p0["name"])
+                        f_type = gr.Radio(list(PROVIDER_TYPES), value=p0["type"], label="類型")
+                        f_url = gr.Textbox(label="Base URL", value=p0["base_url"],
+                                           placeholder="https://integrate.api.nvidia.com/v1/chat/completions")
+                        f_model = gr.Textbox(label="模型 ID", value=p0["model"])
+                        f_key = gr.Textbox(label="API Key", value=p0["api_key"], type="password")
+                        f_wmodel = gr.Radio(_opt(h3, "AI_WORKSHOP_MODEL_OPTIONS", [p0["workshop_model"]]),
+                                            value=p0["workshop_model"], label="AI 工坊模型", visible=False)
+                        f_strata = gr.Checkbox(value=bool(p0["strata_allow_private"]), visible=False,
+                                               label="允許區網位址（Strata 不在本機、在其他電腦上時勾選）")
+                        with gr.Group(visible=False) as f_local:
+                            models, mmproj = gguf_lists()
+                            f_lmodel = gr.Radio(models, value=_first(models, p0["local_model"]), label="GGUF 模型")
+                            f_mmproj = gr.Radio(mmproj, value=_first(mmproj, p0["local_mmproj"]), label="視覺投影 mmproj")
+                            f_ctx = gr.Slider(8192, 65536, value=int(p0["local_context_size"]), step=1024,
+                                              label="上下文 Token")
+                            f_max = gr.Slider(256, int(getattr(LOCAL_PV, "MAX_OUTPUT_TOKENS", 61440)),
+                                              value=int(p0["local_max_tokens"]), step=256, label="單次生成 Token（含思考）")
+                            thinks = list(getattr(qwi, "LOCAL_THINK_OPTIONS", None)
+                                          or [LOCAL_PV.LOCAL_THINK_OFF, getattr(LOCAL_PV, "LOCAL_THINK_ON", "开启")])
+                            f_think = gr.Radio(thinks, value=_first(thinks, p0["local_think_mode"]), label="思考模式")
+                            unloads = _opt(LOCAL_PV, "LOCAL_UNLOAD_POLICIES", [p0["local_unload_policy"]])
+                            f_unload = gr.Radio(unloads, value=_first(unloads, p0["local_unload_policy"]), label="卸載策略")
+                        f_hint = gr.Markdown()
+                        with gr.Row():
+                            f_save = gr.Button("💾 儲存此來源", variant="primary")
+                            f_test = gr.Button("🔌 測試連線")
+                        f_msg = gr.Markdown()
+
+                with gr.Accordion("本地 llama.cpp 與全域設定", open=False):
+                    s_server = gr.Textbox(label="llama-server 執行檔路徑（例：C:\\llama.cpp\\llama-server.exe，也可填資料夾）",
+                                          value=CFG["llama_server_path"])
+                    s_pyfb = gr.Checkbox(value=bool(CFG["allow_llama_cpp_python"]),
+                                         label="允許退回 llama-cpp-python（裝壞時會出錯，建議關閉）")
+                    s_dir = gr.Textbox(label="模型根目錄（其下的 LLM/ 放 .gguf）", value=CFG["models_dir"])
+                    with gr.Row():
                         s_check = gr.Button("🔍 檢查本地執行環境", size="sm")
-                        s_rt = gr.Markdown()
-                        s_dir = gr.Textbox(label="模型根目錄（其下的 LLM/ 放 .gguf）", value=CFG["models_dir"])
-                        models, mmproj = gguf_lists()
-                        s_lmodel = gr.Radio(models, value=_first(models, CFG["local_model"]), label="模型")
-                        s_mmproj = gr.Radio(mmproj, value=_first(mmproj, CFG["local_mmproj"]), label="視覺投影 mmproj")
                         s_scan = gr.Button("↻ 掃描 GGUF", size="sm")
-                        s_ctx = gr.Slider(8192, 65536, value=int(CFG["local_context_size"]), step=1024, label="上下文 Token")
-                        s_max = gr.Slider(256, int(getattr(LOCAL_PV, "MAX_OUTPUT_TOKENS", 61440)),
-                                          value=int(CFG["local_max_tokens"]), step=256, label="單次生成 Token（含思考）")
-                        thinks = list(getattr(qwi, "LOCAL_THINK_OPTIONS", None) or getattr(LOCAL_PV, "LOCAL_THINK_OPTIONS", None)
-                                      or [LOCAL_PV.LOCAL_THINK_OFF, getattr(LOCAL_PV, "LOCAL_THINK_ON", "开启")])
-                        s_think = gr.Radio(thinks, value=_first(thinks, CFG["local_think_mode"]), label="思考模式")
-                        s_unload = gr.Radio(_opt(LOCAL_PV, "LOCAL_UNLOAD_POLICIES", [CFG["local_unload_policy"]]),
-                                            value=CFG["local_unload_policy"], label="卸載策略")
-                with gr.Row():
-                    s_save_keys = gr.Checkbox(value=bool(CFG["save_keys"]), label="把 API Key 存進設定檔（明文）")
-                    s_conc = gr.Slider(1, 32, value=int(CFG["concurrency"]), step=1, label="最多同時執行數（重啟生效）")
-                s_btn = gr.Button("💾 儲存設定", variant="primary")
-                s_msg = gr.Markdown()
+                    s_rt = gr.Markdown()
+                    with gr.Row():
+                        s_save_keys = gr.Checkbox(value=bool(CFG["save_keys"]), label="把 API Key 存進設定檔（明文）")
+                        s_conc = gr.Slider(1, 32, value=int(CFG["concurrency"]), step=1, label="最多同時執行數（重啟生效）")
+                    s_gsave = gr.Button("💾 儲存全域設定")
+                    s_gmsg = gr.Markdown()
 
-                def save(channel, url, model, okey, skey, wkey, wmodel, wcustom, mdir, lmodel, mm, ctx, mx,
-                         think, unload, save_keys, conc, server, pyfb):
-                    CFG.update(llama_server_path=str(server or "").strip().strip('"'),
-                               allow_llama_cpp_python=bool(pyfb))
-                    CFG.update(channel=channel, openai_base_url=url, openai_model=model, openai_key=okey,
-                               seedance_key=skey, workshop_key=wkey, workshop_model=wmodel,
-                               workshop_custom_model=wcustom, models_dir=mdir, local_model=lmodel,
-                               local_mmproj=mm, local_context_size=int(ctx), local_max_tokens=int(mx),
-                               local_think_mode=think, local_unload_policy=unload, save_keys=bool(save_keys),
-                               concurrency=int(conc))
-                    set_models_dir(mdir)
-                    data = dict(CFG)
-                    if not save_keys:
-                        for k in ("openai_key", "seedance_key", "workshop_key"):
-                            data[k] = ""
-                    CONFIG_PATH.write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")
-                    return f"✓ 已儲存到 `{CONFIG_PATH.name}`，立即生效（同時執行數需重啟）。"
-
-                def scan(mdir):
-                    set_models_dir(mdir)
-                    m, p = gguf_lists()
-                    return gr.Radio(choices=m, value=_first(m, CFG["local_model"])), \
-                        gr.Radio(choices=p, value=_first(p, CFG["local_mmproj"]))
-
-                s_btn.click(save, [s_channel, s_url, s_model, s_okey, s_skey, s_wkey, s_wmodel, s_wcustom, s_dir,
-                                   s_lmodel, s_mmproj, s_ctx, s_max, s_think, s_unload, s_save_keys, s_conc,
-                                   s_server, s_pyfb], s_msg)
-
-                def check(server, pyfb, mdir):
-                    CFG.update(llama_server_path=str(server or "").strip().strip('"'),
-                               allow_llama_cpp_python=bool(pyfb), models_dir=mdir)
-                    set_models_dir(mdir)
-                    return runtime_report()
-
-                s_check.click(check, [s_server, s_pyfb, s_dir], s_rt)
-                s_scan.click(scan, s_dir, [s_lmodel, s_mmproj])
+                profile_form = [f_name, f_type, f_url, f_model, f_key, f_wmodel, f_strata,
+                                f_lmodel, f_mmproj, f_ctx, f_max, f_think, f_unload]
+                settings_ui = dict(list=s_list, form=profile_form, vis=[f_url, f_model, f_key, f_wmodel, f_strata,
+                                                                        f_local, f_hint],
+                                   new=s_new, dup=s_dup, star=s_star, delete=s_del, info=s_info, save=f_save,
+                                   test=f_test, msg=f_msg, server=s_server, pyfb=s_pyfb, dir=s_dir,
+                                   check=s_check, scan=s_scan, rt=s_rt, save_keys=s_save_keys, conc=s_conc,
+                                   gsave=s_gsave, gmsg=s_gmsg)
 
             # ───────── MiniMax H3 ─────────
             with gr.Tab("MiniMax H3"):
@@ -758,6 +1068,20 @@ def build_ui():
                             constraints = gr.Textbox(label="硬性要求", lines=2)
                             vurls = gr.Textbox(label="參考影片公開 URL（OpenAI 相容渠道，每行一個）", lines=2)
                             seed = gr.Number(label="seed", value=0, precision=0)
+                        with gr.Accordion("視覺風格與分鏡（實驗）", open=False, visible=bool(STYLE_OPTIONS or STORYBOARD_OPTIONS)):
+                            gr.Markdown("色彩風格、創作者風格各選一個（選「未选择 / None」= 關閉），兩者可同時使用。")
+                            c_q = gr.Textbox(placeholder="搜尋色彩風格（編號或名稱）…", show_label=False, visible=bool(STYLE_OPTIONS))
+                            color_sel = gr.Radio(STYLE_OPTIONS, value=STYLE_NONE, label="色彩風格",
+                                                 elem_classes="tpl-list", visible=bool(STYLE_OPTIONS))
+                            color_scope = gr.Radio(STYLE_SCOPES, value=STYLE_SCOPES[0] if STYLE_SCOPES else None,
+                                                   label="色彩範圍", visible=bool(STYLE_SCOPES))
+                            k_q = gr.Textbox(placeholder="搜尋創作者風格（編號或名稱）…", show_label=False, visible=bool(STYLE_OPTIONS))
+                            creator_sel = gr.Radio(STYLE_OPTIONS, value=STYLE_NONE, label="創作者風格",
+                                                   elem_classes="tpl-list", visible=bool(STYLE_OPTIONS))
+                            storyboard = gr.Radio(STORYBOARD_OPTIONS, value=STORYBOARD_OPTIONS[0] if STORYBOARD_OPTIONS else None,
+                                                  label="分鏡導演", visible=bool(STORYBOARD_OPTIONS))
+                            c_q.change(filter_styles, [c_q, color_sel], color_sel)
+                            k_q.change(filter_styles, [k_q, creator_sel], creator_sel)
                         btn = gr.Button("運行提示詞優化", variant="primary", size="lg")
                         out = copy_box(label="enhanced_prompt", lines=20)
                         pv, full = request_panel()
@@ -770,7 +1094,7 @@ def build_ui():
                 wire(btn, pv, run_h3,
                      [ch, tpl, prompt, task, first, last, gal, duration, shots, rewrite, lang, words, preset,
                       director, quality, creation, profile, pmode, ref_template, ref_ctx, constraints, vurls, seed,
-                      rule_sel, rule_target], [out], full)
+                      rule_sel, rule_target, color_sel, color_scope, creator_sel, storyboard], [out], full)
 
             # ───────── MiniMax Music 3 ─────────
             with gr.Tab("Music 3"):
@@ -914,6 +1238,50 @@ def build_ui():
                         pv5, full5 = request_panel()
                 wire(btn5, pv5, run_qwi, [ch5, prompt5, mode5, gal5, max_chars, ratio, transparent, profile5, seed5],
                      [q_prompt, q_ratio, q_req, q_rep], full5)
+
+            # ───────── MOSS Image ─────────
+            with gr.Tab("MOSS Image", visible=MOSS is not None):
+                if MOSS is not None:
+                    with gr.Row(equal_height=False):
+                        with gr.Column(scale=1, min_width=420):
+                            ch6 = channel_radio()
+                            prompt6 = gr.Textbox(label="創作需求 / Brief", lines=4)
+                            ops = [MOSS_C.GENERATE, MOSS_C.COMPILE]
+                            op6 = gr.Radio(ops, value=ops[0], label="處理方式")
+                            fmts = list(MOSS_C.FORMATS)
+                            fmt6 = gr.Radio(fmts, value=fmts[0], label="輸出格式（Caption 自然描述 / Layout 空間排版）")
+                            with gr.Row():
+                                w6 = gr.Number(label="寬（8 的倍數）", value=1024, precision=0)
+                                h6 = gr.Number(label="高（8 的倍數）", value=1024, precision=0)
+                            langs6 = list(MOSS_C.LANGUAGES)
+                            lang6 = gr.Radio(langs6, value=langs6[0], label="描述語言")
+                            prof6 = gr.Radio(MOSS_PROFILES, value=MOSS_PROFILES[0] if MOSS_PROFILES else None,
+                                             label="強化模式", visible=bool(MOSS_PROFILES))
+                            gal6 = gr.Gallery(type="pil", label="參考圖（最多 10 張；只給 LLM 參考，不是 MOSS 原生圖像編輯）",
+                                              interactive=True, columns=5, height=170)
+                            with gr.Accordion("進階設定", open=False):
+                                locked6 = gr.Textbox(label="鎖定畫面文案（畫面上要出現的確切文字）", lines=2)
+                                maxc6 = gr.Slider(0, int(MOSS_C.MAX_DESCRIPTION_CHARS), value=0, step=100,
+                                                  label="最大描述字數（0 = 自動）")
+                                corr6 = gr.Radio([0, 1], value=1, label="最多追加糾正次數")
+                                draft6 = gr.Textbox(label="原始草稿 Draft JSON（處理方式選「仅校验编译」時使用）", lines=4)
+                                seed6 = gr.Number(label="seed", value=0, precision=0)
+                            btn6 = gr.Button("生成 MOSS 提示詞", variant="primary", size="lg")
+                        with gr.Column(scale=1, min_width=420):
+                            m_pos = copy_box(label="positive_prompt（接 MOSS 正向提示詞）", lines=14)
+                            with gr.Row():
+                                m_w = gr.Number(label="width", precision=0)
+                                m_h = gr.Number(label="height", precision=0)
+                                m_fmt = gr.Textbox(label="resolved_format")
+                            with gr.Accordion("可編輯草稿 / 診斷報告", open=False):
+                                m_draft = code_box(label="draft_json", lines=10)
+                                m_rep = code_box(label="report_json", lines=10)
+                            pv6, full6 = request_panel()
+                    wire(btn6, pv6, run_moss, [ch6, prompt6, op6, fmt6, w6, h6, lang6, gal6, locked6, maxc6, prof6,
+                                                corr6, draft6, seed6], [m_pos, m_w, m_h, m_fmt, m_draft, m_rep], full6)
+        wire_settings(settings_ui)
+        demo.load(lambda: [*type_visibility(get_profile(CFG["default_profile"])["type"]), list_info()],
+                  None, [*settings_ui["vis"], settings_ui["info"]])
     return demo
 
 

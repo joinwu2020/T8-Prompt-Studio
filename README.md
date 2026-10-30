@@ -2,15 +2,16 @@
 
 讓 [comfyui-minimax-h3-prompt-enhancer-T8](https://github.com/T8mars/comfyui-minimax-h3-prompt-enhancer-T8) 節點**脫離 ComfyUI 單獨運行**的 Gradio WebUI。
 
-不用開 ComfyUI、不用排 ComfyUI 的單線佇列，四個提示詞增強器各一個分頁，可以同時執行。可以接 LM Studio、llama-server 等 OpenAI 相容 API，也可以用本地 llama.cpp 跑 GGUF。
+不用開 ComfyUI、不用排 ComfyUI 的單線佇列，五個提示詞增強器各一個分頁，可以同時執行。可以存多組 API 來源（LM Studio、NVIDIA、llama-server 等 OpenAI 相容 API、Strata 本地服務、本地 llama.cpp 的 GGUF…），每個分頁各自選用。
 
 | 分頁 | 用途 | 輸出 |
 |---|---|---|
-| ⚙ 渠道設定 | API、本地 llama.cpp、模型與並行數 | — |
+| ⚙ API 來源 | 管理多組 API 來源、本地 llama.cpp、並行數 | — |
 | MiniMax H3 | MiniMax-H3 視頻提示詞（T2VA / I2VA / FL2VA / L2VA / Ref2VA / Hybrid） | enhanced_prompt |
 | Music 3 | MiniMax Music 3 歌詞與音樂描述 | lyrics、music_caption、payload JSON、報告 |
 | YuE2 | YuE2 風格、歌詞與 ABC 樂譜 | style、lyrics、abc、請求 JSON、報告 |
 | Qwen Image 2.1 | 文生圖，或 1–10 張圖的圖像編輯提示詞 | rewritten_prompt、wh_ratio、請求 JSON、報告 |
+| MOSS Image | MOSS 圖像提示詞（Caption 自然描述 / Layout 空間排版），可附 1–10 張參考圖 | positive_prompt、width、height、resolved_format、draft_json、報告 |
 
 > [!IMPORTANT]
 > 本專案只是 T8 節點的**外部啟動介面**，不包含、也不散布節點的任何程式碼、模板庫或預覽圖。
@@ -29,7 +30,7 @@
 
 | 設定 | 值 |
 |---|---|
-| 渠道 | 本地 GGUF（節點內建 llama.cpp） |
+| API 來源 | 本地 GGUF（節點內建 llama.cpp） |
 | T8 模板 | 无（不使用 T8 案例） |
 | 規範 MD | 昭和後期電影感（模板層） |
 | 生成類型 | Ref2VA（參考圖生音視頻） |
@@ -130,11 +131,13 @@ GitHub 會產生一行 https://github.com/user-attachments/assets/... 的網址�
 ## 特色
 
 - **不需要 ComfyUI**：直接呼叫節點的 Python 函式，ComfyUI 相關模組以替身代替。
-- **可同時執行**：四個分頁、多個請求同時送出，不會互相排隊（本地 GGUF 例外，見下方說明）。
+- **多組 API 來源**：LM Studio、NVIDIA、Strata、本地 GGUF、雲端金鑰可以同時存好幾組，每個分頁各自選用，還能一鍵測試連線。
+- **可同時執行**：五個分頁、多個請求同時送出，不會互相排隊；不同分頁用不同來源也可以（本地 GGUF 例外，見下方說明）。
 - **跟著節點更新**：腳本執行時才從節點資料夾讀取程式碼。節點 `git pull` 後重開即是新版，不需要改腳本。常數改名或參數刪除時會自動降級並在終端機提示 `[相容]`，而不是整個無法啟動。
-- **H3 三欄介面**：左欄點選 T8 模板（共 275 個，可搜尋）、中欄填參考資料、右欄顯示模板說明與預覽 GIF，沒有下拉選單。
+- **H3 三欄介面**：左欄點選 T8 模板（共 307 個，可搜尋）、中欄填參考資料、右欄顯示模板說明與預覽 GIF，沒有下拉選單。
 - **外掛 MD 規範**：把自己的風格規範 `.md` 放進 `h3_rules/`，勾選後會比照 T8 模板的結構送進 system 訊息，並綁定你的提示詞與自動抽出待填欄位。
-- **預覽完整請求**：每個分頁都能檢視實際送給 LLM 的完整內容（模板 + 規範 + 提示詞），預覽時不送出、不耗 token。
+- **H3 視覺風格與分鏡**：200 種色彩風格、200 種創作者風格（可搜尋），以及實驗性的分鏡導演，與 T8 模板、MD 規範可同時使用。
+- **預覽完整請求**：每個分頁都能檢視實際送給 LLM 的完整內容（模板 + 規範 + 提示詞），預覽時不送出、不耗 token（Strata 也一樣）。
 
 ---
 
@@ -143,9 +146,9 @@ GitHub 會產生一行 https://github.com/user-attachments/assets/... 的網址�
 | 項目 | 說明 |
 |---|---|
 | Python | 3.10 以上（已測試 3.12、3.13） |
-| T8 節點 | 必須先安裝 [comfyui-minimax-h3-prompt-enhancer-T8](https://github.com/T8mars/comfyui-minimax-h3-prompt-enhancer-T8)；已測試 1.30.0 |
+| T8 節點 | 必須先安裝 [comfyui-minimax-h3-prompt-enhancer-T8](https://github.com/T8mars/comfyui-minimax-h3-prompt-enhancer-T8)；已測試 1.38.1 |
 | ComfyUI | **不需要啟動**。只有在節點裝在 `ComfyUI/custom_nodes/` 底下時，本地 GGUF 會預設讀取 `ComfyUI/models/LLM` |
-| LLM | 擇一：OpenAI 相容 API（LM Studio、llama-server、vLLM…）、本地 llama.cpp、貞貞平價小屋、貞貞的 AI 工坊 |
+| LLM | 任選一種或多種：OpenAI 相容 API（LM Studio、llama-server、vLLM、NVIDIA…）、Strata 本地服務、本地 llama.cpp、貞貞平價小屋、貞貞的 AI 工坊 |
 
 ### Python 函式庫
 
@@ -160,7 +163,7 @@ GitHub 會產生一行 https://github.com/user-attachments/assets/... 的網址�
 
 | 套件 / 程式 | 何時需要 |
 |---|---|
-| `llama-server`（[llama.cpp b11068](https://github.com/ggml-org/llama.cpp/releases/tag/b11068)） | 使用「本地 GGUF」渠道時。**建議用這個**，下載方式見[本地 GGUF](#本地-gguf節點內建-llamacpp) |
+| `llama-server`（[llama.cpp b11068](https://github.com/ggml-org/llama.cpp/releases/tag/b11068)） | 使用「本地 GGUF」來源時。**建議用這個**，下載方式見[本地 GGUF](#本地-gguf節點內建-llamacpp) |
 | `llama-cpp-python` | 本地 GGUF 的備援。預設停用，因為 Windows 上常因缺少 `llama.dll` 而無法載入 |
 
 ---
@@ -233,19 +236,38 @@ Windows 也可以直接雙擊 `start_t8_webui.bat`。
 
 ---
 
-## 渠道設定
+## API 來源
 
-第一次使用先到「⚙ 渠道設定」設定好，按「💾 儲存設定」後立即生效。每個分頁都可以臨時切換成其他渠道。
+在「⚙ API 來源」分頁管理。可以存好幾組來源，每一組有自己的名稱、類型、網址、模型和金鑰；每個功能分頁上方都能挑要用哪一組，標 ★ 的是預設。
 
-### OpenAI 相容（LM Studio / llama-server / vLLM）
-
-| 欄位 | 範例 |
+| 按鈕 | 作用 |
 |---|---|
-| Base URL | `http://192.168.0.53:1234/v1/chat/completions`（可含或不含 `/chat/completions`） |
-| 模型 ID | `gemma-4-12b` |
-| API Key | LM Studio 不驗證，填任意值即可 |
+| ＋ 新增 / ⧉ 複製 | 建立新來源，或以目前選的來源為底複製一份（例如同一個服務換不同模型） |
+| 💾 儲存此來源 | 儲存右側表單；改名也在這裡 |
+| ★ 設為預設 | 各分頁預設選這一組 |
+| 🗑 刪除 | 刪除目前選的來源（至少保留一組） |
+| 🔌 測試連線 | OpenAI 相容 / Strata：列出服務上的模型，並檢查填的模型 ID 是否存在；本地 GGUF：檢查 llama-server 與模型 |
 
-H3 的 Ref2VA 與 Qwen Image 的圖像編輯會把參考圖以 base64 送出，請使用支援視覺輸入的模型。
+### OpenAI 相容（LM Studio / llama-server / vLLM / NVIDIA…）
+
+| 欄位 | LM Studio 範例 | NVIDIA 範例 |
+|---|---|---|
+| Base URL | `http://192.168.0.53:1234/v1/chat/completions` | `https://integrate.api.nvidia.com/v1/chat/completions` |
+| 模型 ID | `gemma-4-12b` | `nvidia/nemotron-3.5-super-vl-120b-a12b` |
+| API Key | 不驗證，填任意值 | `nvapi-...` |
+
+Base URL 可含或不含 `/chat/completions`。H3 的 Ref2VA、Qwen Image 圖像編輯、MOSS 的參考圖會以 base64 送出，請使用支援視覺輸入的模型。
+
+### Strata 本地服務（橋接）
+
+連到已經在執行的 [Strata](https://github.com/T8mars/comfyui-minimax-h3-prompt-enhancer-T8/blob/main/docs/strata-bridge.md) 服務。Strata 跟本 WebUI 一樣是獨立於 ComfyUI 的程式，WebUI 只是把它當成一種 API 來源，不會啟動、停止或切換它的模型。
+
+| 欄位 | 說明 |
+|---|---|
+| Strata 服務位址 | 預設 `http://127.0.0.1:8080` |
+| 模型 | 留空或 `AUTO` = 使用服務目前載入的模型 |
+| API Key | 本機選填；**Strata 在其他電腦上時必填** |
+| 允許區網位址 | Strata 不在本機時勾選 |
 
 ### 本地 GGUF（節點內建 llama.cpp）
 
@@ -265,15 +287,15 @@ H3 的 Ref2VA 與 Qwen Image 的圖像編輯會把參考圖以 base64 送出，�
 
 #### 2. 在 WebUI 設定
 
-1. 到「⚙ 渠道設定」，在「llama-server 執行檔路徑」填入 `C:\llama.cpp\llama-server.exe`，或它所在的資料夾。
+1. 到「⚙ API 來源」，展開「本地 llama.cpp 與全域設定」，在「llama-server 執行檔路徑」填入 `C:\llama.cpp\llama-server.exe`，或它所在的資料夾，按「💾 儲存全域設定」。
 2. 按「🔍 檢查本地執行環境」，確認出現「✅ 將使用」。
-3. 把 `.gguf` 模型放進 `ComfyUI/models/LLM/`（或在「模型根目錄」改成其他位置，模型放在其下的 `LLM/`），按「↻ 掃描 GGUF」後選擇模型與 mmproj。
-4. 按「💾 儲存設定」，回到分頁把渠道切到「本地 GGUF」。
+3. 把 `.gguf` 模型放進 `ComfyUI/models/LLM/`（或在「模型根目錄」改成其他位置，模型放在其下的 `LLM/`），按「↻ 掃描 GGUF」。
+4. 在左側選「本地 GGUF」來源（類型為本地 GGUF），選擇模型與 mmproj，按「💾 儲存此來源」。不同模型可以各存一組來源。
 
 也可以在 T8 節點資料夾執行 `python install_local_qwen.py --runtime`，讓節點自行下載它驗證過的 llama-server，這樣就不用填路徑。
 
 > [!NOTE]
-> 本地 GGUF 一次只能載入一個模型，節點內建互斥鎖，多個分頁同時使用本地渠道時會排隊。其他渠道不受影響。
+> 本地 GGUF 一次只能載入一個模型，節點內建互斥鎖，多個分頁同時使用本地來源時會排隊。其他來源不受影響。
 
 #### 3. GGUF 模型
 
@@ -293,7 +315,7 @@ H3 的 Ref2VA 與 Qwen Image 的圖像編輯會把參考圖以 base64 送出，�
 
 **選用：Qwen Image 專用 PE 模型**
 
-這些模型來自 T8 另一個節點 [Comfyui-Qwen-Image-Prompt-Rewrite-T8](https://github.com/T8mars/Comfyui-Qwen-Image-Prompt-Rewrite-T8)。本 WebUI 不會呼叫那個節點，但它提供的 GGUF 可以放進 `models/LLM/`，在本地 GGUF 渠道選用。
+這些模型來自 T8 另一個節點 [Comfyui-Qwen-Image-Prompt-Rewrite-T8](https://github.com/T8mars/Comfyui-Qwen-Image-Prompt-Rewrite-T8)。本 WebUI 不會呼叫那個節點，但它提供的 GGUF 可以放進 `models/LLM/`，在本地 GGUF 來源選用。
 
 ```bash
 cd ComfyUI/custom_nodes
@@ -313,11 +335,11 @@ cd Comfyui-Qwen-Image-Prompt-Rewrite-T8
 
 ### 貞貞平價小屋 / 貞貞的 AI 工坊
 
-填入對應的 API Key 即可。平價小屋的 Key 留空時，會讀取環境變數 `SEEDANCE_API_KEY`。
+新增一組來源，類型選對應的服務，填入 API Key 即可。平價小屋的 Key 留空時，會讀取環境變數 `SEEDANCE_API_KEY`。
 
 ### 設定檔
 
-設定會存在節點資料夾的 `.t8_webui.local.json`。勾選「把 API Key 存進設定檔」時，**Key 會以明文保存**；不勾選則每次啟動需重新輸入。本專案的 `.gitignore` 已排除這個檔案。
+設定會存在節點資料夾的 `.t8_webui.local.json`。舊版（單一渠道）的設定檔會在啟動時自動轉成多組來源，原本的金鑰會保留。勾選「把 API Key 存進設定檔」時，**Key 會以明文保存**；不勾選則每次啟動需重新輸入。本專案的 `.gitignore` 已排除這個檔案。
 
 ---
 
@@ -328,9 +350,19 @@ cd Comfyui-Qwen-Image-Prompt-Rewrite-T8
 1. **左欄**點選 T8 模板，可用關鍵字搜尋或依「案例 / 社區 Skill」篩選；不需要模板就選「无（不使用 T8 案例）」。
 2. **右欄**會顯示模板用途、結構錨點、推薦輸入與預覽 GIF。按「↙ 套用到提示詞」可帶入範例。
 3. **中欄**填寫提示詞、選擇生成類型、上傳首尾幀或參考圖（Ref2VA 最多 9 張，依序對應 `<Picture 1>`、`<Picture 2>`…）。
-4. 按「運行提示詞優化」。
+4. 需要的話，展開「視覺風格與分鏡（實驗）」挑色彩風格、創作者風格或開啟分鏡導演；可以和 T8 模板、MD 規範同時使用。
+5. 按「運行提示詞優化」。
 
 預覽 GIF 來自節點的預覽資源。若顯示「找不到預覽 GIF」，請在 ComfyUI 的節點上用「管理 / 更新 T8 動態預覽」下載一次，不影響生成。
+
+### MOSS Image
+
+填寫創作需求、選輸出格式（AUTO、Caption 自然描述、Layout 空間排版）和最終寬高（8 的倍數），按「生成 MOSS 提示詞」。把 `positive_prompt`、`width`、`height` 接到 MOSS 的生圖節點。
+
+- **參考圖**只給 LLM 看，用來撰寫描述，不是 MOSS 的原生圖像編輯。
+- **鎖定畫面文案**：畫面上必須出現的確切文字。
+- **強化模式**：Classic（原版）、Fisher（通用長版）、Comic（漫畫卡通）。
+- **仅校验编译**：不呼叫 LLM，只把「Draft JSON」編譯成正式提示詞，可用來手動修改草稿後重新產生。
 
 ### 外掛 MD 規範
 
@@ -373,7 +405,7 @@ git pull
 <details>
 <summary><b>本地 GGUF 出現 <code>Failed to load shared library ... llama.dll</code></b></summary>
 
-這是系統 Python 裡的 `llama-cpp-python` 缺少原生函式庫。請在渠道設定填入 `llama-server.exe` 路徑，並保持「允許退回 llama-cpp-python」關閉。按「🔍 檢查本地執行環境」可以看到節點實際會使用哪個執行檔。
+這是系統 Python 裡的 `llama-cpp-python` 缺少原生函式庫。請在「⚙ API 來源 → 本地 llama.cpp 與全域設定」填入 `llama-server.exe` 路徑，並保持「允許退回 llama-cpp-python」關閉。按「🔍 檢查本地執行環境」可以看到節點實際會使用哪個執行檔。
 </details>
 
 <details>
@@ -404,9 +436,9 @@ Gradio 與新版 Starlette 之間的棄用警告，不影響使用，可以忽�
 
 ## 已知限制
 
-- **不支援上傳影片檔**：節點需要 ComfyUI 的影片物件。H3 的參考影片只能在 OpenAI 相容渠道填寫公開 URL。
-- **未包含 Seedance 2.0 分頁**。
-- **共用設定**：所有連線到同一個 WebUI 的人共用同一份渠道設定與 API Key，請勿在不信任的網路上使用 `--host 0.0.0.0`。
+- **不支援上傳影片檔**：節點需要 ComfyUI 的影片物件。H3 的參考影片只能在 OpenAI 相容來源填寫公開 URL。
+- **未包含 Seedance 2.0 分頁**，也未包含節點的 MOSS 整冊創作（Director / Page）、H3 視覺標記、語音參考等需要搭配其他 ComfyUI 節點的功能。
+- **共用設定**：所有連線到同一個 WebUI 的人共用同一份 API 來源與金鑰，請勿在不信任的網路上使用 `--host 0.0.0.0`。
 - **生成品質取決於模型**：T8 節點的規則對大模型最有效，小模型（例如 12B）可能無法完整遵守所有模板錨點與規範。
 
 ---
@@ -415,7 +447,7 @@ Gradio 與新版 Starlette 之間的棄用警告，不影響使用，可以忽�
 
 | 檔案 | 說明 |
 |---|---|
-| `t8_webui.py` | WebUI 主程式：介面、渠道、並行、請求攔截、MD 規範 |
+| `t8_webui.py` | WebUI 主程式：介面、API 來源管理、並行、請求攔截、MD 規範 |
 | `t8_boot.py` | 啟動層：提供 ComfyUI 模組替身，以套件方式載入節點模組（不執行節點的 `__init__.py`，不註冊 ComfyUI 節點） |
 | `start_t8_webui.bat` | Windows 雙擊啟動 |
 | `requirements.txt` | Python 依賴 |

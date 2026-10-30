@@ -1,0 +1,11 @@
+# 本機設定（可能含 API Key，切勿上傳）
+.t8_webui.local.json
+
+# 使用者自己的規範 MD
+h3_rules/
+
+# Python
+__pycache__/
+*.pyc
+.venv/
+venv/
