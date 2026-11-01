@@ -1,4 +1,4 @@
-# T8 Prompt Studio
+# T8 Prompt Studio 20261101
 
 讓 [comfyui-minimax-h3-prompt-enhancer-T8](https://github.com/T8mars/comfyui-minimax-h3-prompt-enhancer-T8) 節點**脫離 ComfyUI 單獨運行**的 Gradio WebUI。
 
