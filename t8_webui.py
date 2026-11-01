@@ -814,6 +814,21 @@ def type_visibility(t):
             gr.update(visible=show["strata"]), gr.update(visible=show["local"]), TYPE_HINTS.get(t, "")]
 
 
+def radio_with(options, value):
+    """Radio 的值必須在選項內：值不在清單時把它補進選項（例如模型檔改名或在其他電腦上）"""
+    opts = list(options)
+    if value and value not in opts:
+        opts = [value, *opts]
+    return gr.Radio(choices=opts, value=value or (opts[0] if opts else None))
+
+
+def local_defaults():
+    """新來源預設用實際找到的第一個 GGUF，而不是節點內建的預設檔名"""
+    models, mmproj = gguf_lists()
+    return {"local_model": models[0] if models else PROFILE_DEFAULTS["local_model"],
+            "local_mmproj": _first(mmproj, PROFILE_DEFAULTS["local_mmproj"]) if mmproj else PROFILE_DEFAULTS["local_mmproj"]}
+
+
 def list_info():
     rows = [f"- {'★ ' if n == CFG['default_profile'] else ''}**{n}**　{get_profile(n)['type']}" for n in profile_names()]
     return "\n".join(rows)
@@ -844,6 +859,9 @@ def wire_settings(ui):
 
     def load(name):
         vals = form_values(name)
+        models, mmproj = gguf_lists()
+        vals[7] = radio_with(models, vals[7])   # 存的模型不在目前清單時也要能顯示，否則 Gradio 會拒絕儲存
+        vals[8] = radio_with(mmproj, vals[8])
         return [*vals, *type_visibility(vals[1]), ""]
     lst.change(load, lst, [*form, *vis, ui["msg"]])
 
@@ -871,7 +889,7 @@ def wire_settings(ui):
 
     def add(copy_from=None):
         def fn(selected, *currents):
-            src = get_profile(selected) if copy_from else {**PROFILE_DEFAULTS}
+            src = get_profile(selected) if copy_from else {**PROFILE_DEFAULTS, **local_defaults()}
             name = _unique(f"{src['name']} 複本" if copy_from else "新來源")
             CFG["profiles"].append({**src, "name": name})
             save_cfg()
@@ -983,8 +1001,10 @@ def build_ui():
                                                label="允許區網位址（Strata 不在本機、在其他電腦上時勾選）")
                         with gr.Group(visible=False) as f_local:
                             models, mmproj = gguf_lists()
-                            f_lmodel = gr.Radio(models, value=_first(models, p0["local_model"]), label="GGUF 模型")
-                            f_mmproj = gr.Radio(mmproj, value=_first(mmproj, p0["local_mmproj"]), label="視覺投影 mmproj")
+                            f_lmodel = gr.Radio([*([p0["local_model"]] if p0["local_model"] not in models else []), *models],
+                                                value=p0["local_model"], label="GGUF 模型")
+                            f_mmproj = gr.Radio([*([p0["local_mmproj"]] if p0["local_mmproj"] not in mmproj else []), *mmproj],
+                                                value=p0["local_mmproj"], label="視覺投影 mmproj")
                             f_ctx = gr.Slider(8192, 65536, value=int(p0["local_context_size"]), step=1024,
                                               label="上下文 Token")
                             f_max = gr.Slider(256, int(getattr(LOCAL_PV, "MAX_OUTPUT_TOKENS", 61440)),
