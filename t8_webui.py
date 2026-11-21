@@ -587,11 +587,32 @@ def code_box(**kw):
 
 
 CHANNEL_RADIOS: list = []  # 所有分頁的來源選擇，來源清單變動時一起更新
+CHANNEL_INFOS: list = []   # 各分頁來源選擇下方的類型說明
+
+
+def profile_summary(name):
+    if name not in profile_names():
+        return ""
+    p = get_profile(name)
+    t = p["type"]
+    if t == T_LOCAL:
+        detail = f"`{p['local_model']}`"
+    elif t == T_SEEDANCE:
+        detail = "貞貞平價小屋"
+    elif t == T_WORKSHOP:
+        detail = f"`{p['model'] or p['workshop_model']}`"
+    else:
+        detail = f"`{p['model'] or 'AUTO'}` @ {p['base_url'] or '預設位址'}"
+    icon = "🖥️ 本地" if t == T_LOCAL else ("🔗 Strata" if t == T_STRATA else "☁️ API")
+    return f"{icon}　{t.split('（')[0]} · {detail}"
 
 
 def channel_radio():
     r = gr.Radio(profile_names(), value=CFG["default_profile"], label="API 來源（在 ⚙ API 來源 管理）")
+    info = gr.Markdown(profile_summary(CFG["default_profile"]))
+    r.change(profile_summary, r, info)
     CHANNEL_RADIOS.append(r)
+    CHANNEL_INFOS.append(info)
     return r
 
 
@@ -764,6 +785,30 @@ def run_qwi(channel, prompt, mode, gallery, max_chars, ratio, transparent, profi
 
 
 
+# ═════════════════════════ MiniMax H3 Image（節點 1.41+）═════════════════════════
+try:
+    H3I = B.load("h3_image")
+    H3I_C = B.load("h3_image_contract")
+    H3I_TASKS = list(H3I_C.TASKS)
+    H3I_RATIOS = ["auto", *H3I_C.T2I_RATIOS]
+except Exception as _e:  # noqa: BLE001
+    H3I = H3I_C = None
+    H3I_TASKS, H3I_RATIOS = [], ["auto"]
+    _WARN.append(f"節點沒有 H3 Image 模組（需 1.41+），分頁會隱藏：{_e}")
+
+
+def run_h3i(channel, prompt, task, ratio, custom_ratio, width, height, words, gallery, locked_text, max_corr, seed):
+    ratio = (custom_ratio or "").strip() or ratio
+    refs = gallery_dict(gallery, int(getattr(H3I, "MAX_IMAGES", 16))) if task == H3I_C.EDIT else None
+    out = call_filtered(
+        H3I.MiniMaxH3ImagePromptEnhancer.execute, prompt=prompt, task_type=task, aspect_ratio=ratio,
+        target_words=int(words or 0), reference_images=refs, locked_text=locked_text or "",
+        max_corrections=int(max_corr), seed=int(seed or 0), width=int(width or 0), height=int(height or 0),
+        **provider_kwargs(channel))
+    vals = list(tuple(out))[:4]
+    return vals[0], vals[1], vals[2], vals[3]
+
+
 # ═════════════════════════ MOSS Image（節點 1.36+）═════════════════════════
 try:
     MOSS = B.load("moss_image")
@@ -829,8 +874,48 @@ def local_defaults():
             "local_mmproj": _first(mmproj, PROFILE_DEFAULTS["local_mmproj"]) if mmproj else PROFILE_DEFAULTS["local_mmproj"]}
 
 
+def validate_profile(d):
+    """回傳 (錯誤訊息清單, 警告訊息清單)；有錯誤就不儲存"""
+    t, url, model = d["type"], (d["base_url"] or "").strip(), (d["model"] or "").strip()
+    errs, warns = [], []
+    if t == T_LOCAL:
+        if url or model:
+            errs.append("類型是「本地 GGUF」，但填了 Base URL / 模型 ID。要用 API 請把類型改成「OpenAI 相容」；"
+                        "真的要用本地模型，請清空 Base URL 和模型 ID。")
+        models, _ = gguf_lists()
+        if d["local_model"] not in models:
+            warns.append(f"GGUF 目錄裡找不到 `{d['local_model']}`，執行時會失敗；請按「↻ 掃描 GGUF」後重選。")
+    elif t == T_OPENAI:
+        if not url:
+            errs.append("「OpenAI 相容」需要填 Base URL。")
+        elif not re.match(r"https?://", url, re.I):
+            errs.append("Base URL 要以 `http://` 或 `https://` 開頭。")
+        if not model:
+            errs.append("「OpenAI 相容」需要填模型 ID。")
+        if "nvidia.com" in url and model and "/" not in model:
+            warns.append("NVIDIA 的模型 ID 通常帶廠商前綴，例如 `nvidia/...`、`deepseek-ai/...`。")
+    elif t == T_STRATA:
+        if url and not re.match(r"https?://", url, re.I):
+            errs.append("Strata 服務位址要以 `http://` 或 `https://` 開頭。")
+        if d.get("strata_allow_private") and not (d["api_key"] or "").strip():
+            warns.append("Strata 在區網其他電腦上時必須填 API Key。")
+    elif t in (T_SEEDANCE, T_WORKSHOP) and url:
+        errs.append(f"「{t}」使用固定網址，不需要 Base URL；要用自己的網址請把類型改成「OpenAI 相容」。")
+    return errs, warns
+
+
+def profile_mismatch(p):
+    errs, _ = validate_profile(p)
+    return errs[0] if errs else ""
+
+
 def list_info():
-    rows = [f"- {'★ ' if n == CFG['default_profile'] else ''}**{n}**　{get_profile(n)['type']}" for n in profile_names()]
+    rows = []
+    for n in profile_names():
+        p = get_profile(n)
+        bad = profile_mismatch(p)
+        rows.append(f"- {'★ ' if n == CFG['default_profile'] else ''}**{n}**　{p['type']}"
+                    + (f"\n  ⚠ 設定不一致：{bad}" if bad else ""))
     return "\n".join(rows)
 
 
@@ -854,6 +939,7 @@ def _unique(base):
 def wire_settings(ui):
     lst, form, vis = ui["list"], ui["form"], ui["vis"]
     radios = list(CHANNEL_RADIOS)
+    infos = list(CHANNEL_INFOS)
     f_type = form[1]
     f_type.change(type_visibility, f_type, vis)
 
@@ -866,6 +952,8 @@ def wire_settings(ui):
     lst.change(load, lst, [*form, *vis, ui["msg"]])
 
     def save(selected, *vals):
+        currents = list(vals[len(FORM_KEYS):])   # 各分頁目前選的來源
+        vals = vals[:len(FORM_KEYS)]
         data = dict(zip(FORM_KEYS, vals))
         data["name"] = str(data["name"] or "").strip()
         if not data["name"]:
@@ -875,6 +963,10 @@ def wire_settings(ui):
         for k in ("local_context_size", "local_max_tokens"):
             data[k] = int(data[k])
         data["strata_allow_private"] = bool(data["strata_allow_private"])
+        errs, warns = validate_profile(data)
+        if errs:
+            return [gr.update(), *[gr.update()] * len(radios), gr.update(),
+                    "❌ 未儲存：\n" + "\n".join(f"- {e}" for e in errs)]
         idx = next((i for i, p in enumerate(CFG["profiles"]) if p["name"] == selected), None)
         if idx is None:
             CFG["profiles"].append({**PROFILE_DEFAULTS, **data})
@@ -883,9 +975,12 @@ def wire_settings(ui):
             if CFG["default_profile"] == selected:
                 CFG["default_profile"] = data["name"]
         save_cfg()
-        return [gr.Radio(choices=profile_names(), value=data["name"]), *radio_updates(*[None] * len(radios)),
-                list_info(), f"✓ 已儲存「{data['name']}」"]
-    ui["save"].click(save, [lst, *form], [lst, *radios, ui["info"], ui["msg"]])
+        currents = [data["name"] if c == selected else c for c in currents]  # 改名時分頁選擇跟著換
+        note = "".join(f"\n- ⚠ {w}" for w in warns)
+        return [gr.Radio(choices=profile_names(), value=data["name"]), *radio_updates(*currents),
+                list_info(), f"✓ 已儲存「{data['name']}」（{data['type'].split('（')[0]}）{note}"]
+    ui["save"].click(save, [lst, *form, *radios], [lst, *radios, ui["info"], ui["msg"]]).then(
+        lambda *c: [profile_summary(x) for x in c], radios, infos)
 
     def add(copy_from=None):
         def fn(selected, *currents):
@@ -895,14 +990,17 @@ def wire_settings(ui):
             save_cfg()
             return [gr.Radio(choices=profile_names(), value=name), *radio_updates(*currents), list_info()]
         return fn
-    ui["new"].click(add(), [lst, *radios], [lst, *radios, ui["info"]])
-    ui["dup"].click(add(True), [lst, *radios], [lst, *radios, ui["info"]])
+    ui["new"].click(add(), [lst, *radios], [lst, *radios, ui["info"]]).then(
+        lambda *c: [profile_summary(x) for x in c], radios, infos)
+    ui["dup"].click(add(True), [lst, *radios], [lst, *radios, ui["info"]]).then(
+        lambda *c: [profile_summary(x) for x in c], radios, infos)
 
     def star(selected, *currents):
         CFG["default_profile"] = selected
         save_cfg()
         return [*radio_updates(*currents), list_info()]
-    ui["star"].click(star, [lst, *radios], [*radios, ui["info"]])
+    ui["star"].click(star, [lst, *radios], [*radios, ui["info"]]).then(
+        lambda *c: [profile_summary(x) for x in c], radios, infos)
 
     def delete(selected, *currents):
         if len(CFG["profiles"]) <= 1:
@@ -912,7 +1010,8 @@ def wire_settings(ui):
             CFG["default_profile"] = CFG["profiles"][0]["name"]
         save_cfg()
         return [gr.Radio(choices=profile_names(), value=CFG["default_profile"]), *radio_updates(*currents), list_info()]
-    ui["delete"].click(delete, [lst, *radios], [lst, *radios, ui["info"]])
+    ui["delete"].click(delete, [lst, *radios], [lst, *radios, ui["info"]]).then(
+        lambda *c: [profile_summary(x) for x in c], radios, infos)
 
     def test(*vals):
         d = dict(zip(FORM_KEYS, vals))
@@ -970,8 +1069,9 @@ def wire_settings(ui):
 # ═════════════════════════ 介面 ═════════════════════════
 def build_ui():
     CHANNEL_RADIOS.clear()
+    CHANNEL_INFOS.clear()
     with gr.Blocks(title="T8 Prompt Studio", **({} if _GR6 else {"css": CSS})) as demo:
-        gr.Markdown("## T8 Prompt Studio　·　H3 / Music 3 / YuE2 / Qwen Image 2.1 / MOSS Image")
+        gr.Markdown("## T8 Prompt Studio　·　H3 / Music 3 / YuE2 / Qwen Image 2.1 / H3 Image / MOSS Image")
         with gr.Tabs():
             # ───────── ⚙ API 來源 ─────────
             with gr.Tab("⚙ API 來源"):
@@ -1049,7 +1149,7 @@ def build_ui():
             with gr.Tab("MiniMax H3"):
                 with gr.Row(equal_height=False):
                     with gr.Column(scale=2, min_width=260):
-                        tpl = template_column("流程压缩｜动作载体接力到目的地兑现")
+                        tpl = template_column(NONE_TPL)
                     with gr.Column(scale=4, min_width=420):
                         gr.Markdown("### ② 參考資料")
                         ch = channel_radio()
@@ -1069,7 +1169,7 @@ def build_ui():
                         lang = gr.Radio(langs, value=_first(langs, "English"), label="輸出語言")
                         rules = rules_block()
                         with gr.Accordion("進階設定", open=False):
-                            words = gr.Slider(0, 1000, value=0, step=10, label="目標長度（0 = 自動）")
+                            words = gr.Number(label="目標長度（0 = 自動，節點 1.40.2 起無上限）", value=0, precision=0, minimum=0)
                             presets = _opt(h3, "CREATIVE_PRESET_OPTIONS", ["AUTO"])
                             preset = gr.Radio(presets, value=_first(presets, _opt(h3, "AUTO_CREATIVE_PRESET", None)),
                                               label="MiniMax 官方場景 Skill")
@@ -1258,6 +1358,38 @@ def build_ui():
                         pv5, full5 = request_panel()
                 wire(btn5, pv5, run_qwi, [ch5, prompt5, mode5, gal5, max_chars, ratio, transparent, profile5, seed5],
                      [q_prompt, q_ratio, q_req, q_rep], full5)
+
+            # ───────── MiniMax H3 Image ─────────
+            with gr.Tab("H3 Image", visible=H3I is not None):
+                if H3I is not None:
+                    with gr.Row(equal_height=False):
+                        with gr.Column(scale=1, min_width=420):
+                            ch7 = channel_radio()
+                            prompt7 = gr.Textbox(label="創作 / 編輯需求 / Brief", lines=4)
+                            task7 = gr.Radio(H3I_TASKS, value=H3I_TASKS[0], label="任務")
+                            ratio7 = gr.Radio(H3I_RATIOS, value="auto", label="畫幅比例（文生圖用官方比例）")
+                            gal7 = gr.Gallery(type="pil", label="參考圖（只在「圖像編輯」使用，最多 16 張，依序為 Picture 1…）",
+                                              interactive=True, columns=6, height=170)
+                            with gr.Accordion("進階設定", open=False):
+                                cr7 = gr.Textbox(label="自訂比例 W:H（圖像編輯可用任意比例，填了會覆蓋上面的選項）")
+                                with gr.Row():
+                                    w7 = gr.Number(label="寬 width（0 = 不用）", value=0, precision=0)
+                                    h7 = gr.Number(label="高 height（0 = 不用）", value=0, precision=0)
+                                gr.Markdown("寬高都大於 0 時會換算比例並覆蓋上面的設定（文生圖取最接近的官方比例）。")
+                                words7 = gr.Number(label="目標英文詞數（0 = 官方自動）", value=0, precision=0, minimum=0)
+                                locked7 = gr.Textbox(label="逐字鎖定畫面文案（畫面上要出現的確切文字）", lines=2)
+                                corr7 = gr.Radio([0, 1], value=1, label="最多追加糾正次數")
+                                seed7 = gr.Number(label="本地種子", value=0, precision=0)
+                            btn7 = gr.Button("生成 H3 Image 提示詞", variant="primary", size="lg")
+                        with gr.Column(scale=1, min_width=420):
+                            i_out = copy_box(label="expanded_prompt（擴寫正文）", lines=16)
+                            i_ratio = gr.Textbox(label="aspect_ratio")
+                            with gr.Accordion("官方結構 / 診斷報告", open=False):
+                                i_json = code_box(label="official_json", lines=10)
+                                i_rep = code_box(label="report_json", lines=10)
+                            pv7, full7 = request_panel()
+                    wire(btn7, pv7, run_h3i, [ch7, prompt7, task7, ratio7, cr7, w7, h7, words7, gal7, locked7, corr7, seed7],
+                         [i_out, i_ratio, i_json, i_rep], full7)
 
             # ───────── MOSS Image ─────────
             with gr.Tab("MOSS Image", visible=MOSS is not None):
